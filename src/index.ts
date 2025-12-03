@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { Mistral } from "@mistralai/mistralai";
 import type {
   AssistantMessage,
