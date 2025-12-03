@@ -8,17 +8,23 @@ import type {
   ToolMessage,
   UserMessage,
 } from "@mistralai/mistralai/models/components";
+import chalk from "chalk";
 import "dotenv/config";
 import * as fs from "fs/promises";
+import gradient from "gradient-string";
 import * as path from "path";
 import * as readline from "readline";
 import { SYSTEM_PROMPT } from "./prompt.js";
 
 const apiKey = process.env.MISTRAL_API_KEY || "";
 if (!apiKey) {
-  console.error("Error: MISTRAL_API_KEY environment variable is required");
   console.error(
-    "Please set it in your .env file or export it as an environment variable"
+    chalk.red.bold("✗ Error: MISTRAL_API_KEY environment variable is required")
+  );
+  console.error(
+    chalk.yellow(
+      "Please set it in your .env file or export it as an environment variable"
+    )
   );
   process.exit(1);
 }
@@ -106,6 +112,30 @@ function isToolName(name: string): name is ToolName {
   return name === "read_file" || name === "list_directory";
 }
 
+function createLoadingAnimation(): () => void {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let frameIndex = 0;
+  let interval: NodeJS.Timeout | null = null;
+
+  const animate = () => {
+    process.stdout.write(
+      `\r${chalk.cyan(frames[frameIndex])} ${chalk.cyan("Thinking...")}`
+    );
+    frameIndex = (frameIndex + 1) % frames.length;
+  };
+
+  interval = setInterval(animate, 100);
+  animate(); // Start immediately
+
+  return () => {
+    if (interval) {
+      clearInterval(interval);
+    }
+    // Clear the line
+    process.stdout.write("\r" + " ".repeat(50) + "\r");
+  };
+}
+
 async function executeTool(
   toolName: "read_file",
   args: ReadFileArgs
@@ -178,26 +208,28 @@ async function processCommand(input: string): Promise<void> {
   const trimmed = input.trim();
 
   if (trimmed === "exit" || trimmed === "quit") {
-    console.log("Goodbye!");
+    console.log(chalk.cyan("👋 Goodbye!"));
     rl.close();
     return;
   }
 
   if (trimmed === "clear") {
     conversationHistory.length = 0;
-    console.log("Conversation history cleared.\n");
+    console.log(chalk.green("✓ Conversation history cleared.\n"));
     rl.prompt();
     return;
   }
 
   if (trimmed === "help") {
-    console.log(`
+    console.log(
+      chalk.blue(`
 Available commands:
   - Type any message to chat with the agent
   - 'exit' or 'quit' - Exit the CLI
   - 'clear' - Clear conversation history
   - 'help' - Show this help message
-`);
+`)
+    );
     rl.prompt();
     return;
   }
@@ -209,9 +241,8 @@ Available commands:
 
   conversationHistory.push({ role: "user", content: trimmed });
 
+  const stopLoading = createLoadingAnimation();
   try {
-    console.log("Thinking...\n");
-
     type ChatMessage =
       | (SystemMessage & { role: "system" })
       | (UserMessage & { role: "user" })
@@ -269,7 +300,8 @@ Available commands:
 
       const choice = chatResponse.choices[0];
       if (!choice) {
-        console.log("Agent: No response\n");
+        stopLoading();
+        console.log(chalk.red("✗ Mistral Code: No response\n"));
         break;
       }
 
@@ -296,7 +328,7 @@ Available commands:
 
         for (const toolCall of toolCalls) {
           if (!toolCall.id) {
-            console.error("Tool call missing ID, skipping");
+            console.error(chalk.red("✗ Tool call missing ID, skipping"));
             continue;
           }
 
@@ -306,11 +338,19 @@ Available commands:
               ? toolCall.function.arguments
               : JSON.stringify(toolCall.function.arguments);
 
-          console.log(`\n🔧 Calling tool: ${functionName}`);
-          console.log(`   Arguments: ${functionArgsStr}\n`);
+          console.log(
+            chalk.blue(
+              `\n${chalk.bold("🔧")} Calling tool: ${chalk.yellow(
+                functionName
+              )}`
+            )
+          );
+          console.log(
+            chalk.gray(`   Arguments: ${chalk.gray(functionArgsStr)}\n`)
+          );
 
           if (!isToolName(functionName)) {
-            console.error(`Unknown tool: ${functionName}`);
+            console.error(chalk.red(`✗ Unknown tool: ${functionName}`));
             continue;
           }
 
@@ -325,7 +365,7 @@ Available commands:
             result = await executeTool(functionName, functionArgs);
           } else {
             const _exhaustive: never = functionName;
-            console.error(`Unknown tool: ${functionName}`);
+            console.error(chalk.red(`✗ Unknown tool: ${functionName}`));
             continue;
           }
 
@@ -333,7 +373,9 @@ Available commands:
             result.length > 200
               ? result.substring(0, 200) + "... (truncated)"
               : result;
-          console.log(`✅ Tool result: ${resultPreview}\n`);
+          console.log(
+            chalk.green(`✓ Tool result: ${chalk.gray(resultPreview)}\n`)
+          );
 
           messages.push({
             role: "tool" as const,
@@ -368,7 +410,10 @@ Available commands:
         assistantMessage = "No response";
       }
 
-      console.log(`Agent: ${assistantMessage}\n`);
+      stopLoading();
+      console.log(
+        chalk.bold.cyan("Mistral Code:") + ` ${chalk.white(assistantMessage)}\n`
+      );
 
       conversationHistory.push({
         role: "assistant",
@@ -379,12 +424,14 @@ Available commands:
     }
 
     if (iteration >= maxIterations) {
-      console.log("Agent: Maximum iterations reached\n");
+      stopLoading();
+      console.log(chalk.red("✗ Mistral Code: Maximum iterations reached\n"));
     }
   } catch (error) {
+    stopLoading();
     console.error(
-      "Error:",
-      error instanceof Error ? error.message : "Unknown error"
+      chalk.red.bold("✗ Error:"),
+      chalk.red(error instanceof Error ? error.message : "Unknown error")
     );
     conversationHistory.pop();
   }
@@ -392,8 +439,17 @@ Available commands:
   rl.prompt();
 }
 
+const mistralGradient = gradient(["#ffd800", "#ffaf00", "#ff8203", "#e10300"]);
 console.log(
-  'Mistral CLI Agent - Type your commands (or "help" for help, "exit" to quit)\n'
+  mistralGradient.multiline(`        
+▗▖  ▗▖▗▄▄▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▖  ▗▄▖ ▗▖        ▗▄▄▖ ▗▄▖ ▗▄▄▄ ▗▄▄▄▖
+▐▛▚▞▜▌  █  ▐▌     █  ▐▌ ▐▌▐▌ ▐▌▐▌       ▐▌   ▐▌ ▐▌▐▌  █▐▌   
+▐▌  ▐▌  █   ▝▀▚▖  █  ▐▛▀▚▖▐▛▀▜▌▐▌       ▐▌   ▐▌ ▐▌▐▌  █▐▛▀▀▘
+▐▌  ▐▌▗▄█▄▖▗▄▄▞▘  █  ▐▌ ▐▌▐▌ ▐▌▐▙▄▄▖    ▝▚▄▄▖▝▚▄▞▘▐▙▄▄▀▐▙▄▄▖
+`)
+);
+console.log(
+  chalk.gray('Type your commands (or "help" for help, "exit" to quit)\n')
 );
 rl.prompt();
 
@@ -402,6 +458,6 @@ rl.on("line", (input) => {
 });
 
 rl.on("close", () => {
-  console.log("\nSession ended.");
+  console.log(chalk.cyan("\n👋 Session ended."));
   process.exit(0);
 });
