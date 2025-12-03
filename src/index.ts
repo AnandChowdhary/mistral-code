@@ -9,12 +9,8 @@ import type {
 import "dotenv/config";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { dirname } from "path";
 import * as readline from "readline";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { SYSTEM_PROMPT } from "./prompt.js";
 
 const apiKey = process.env.MISTRAL_API_KEY || "";
 if (!apiKey) {
@@ -25,8 +21,7 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const promptPath = path.join(__dirname, "prompt.md");
-const systemPrompt = await fs.readFile(promptPath, "utf-8");
+const systemPrompt = SYSTEM_PROMPT;
 
 const client = new Mistral({ apiKey });
 
