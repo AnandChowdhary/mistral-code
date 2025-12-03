@@ -29,7 +29,25 @@ A CLI agent powered by Mistral AI, similar to Claude Code. Interact with an AI a
 - Node.js (v20 or higher)
 - A Mistral API key ([get one here](https://console.mistral.ai/))
 
-### Installation
+### Quick start
+
+1. Set up your API key:
+
+   Export it as an environment variable:
+
+   ```bash
+   export MISTRAL_API_KEY=your_api_key_here
+   ```
+
+2. Run Mistral Code:
+
+   ```bash
+   npx mistral-code
+   ```
+
+### Development setup
+
+To contribute or run from source:
 
 1. Install dependencies:
 
