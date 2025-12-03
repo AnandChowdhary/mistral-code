@@ -86,8 +86,10 @@ You have access to the following tools:
 
 - read_file: Read the contents of a file from the filesystem. Use this to understand code, check implementations, and examine file contents.
 - list_directory: List the contents of a directory. Use this to explore the codebase structure and find relevant files.
+- edit_file: Edit a file by replacing a specific string with a new string. Use old_str to specify the exact text to replace (including whitespace and newlines), and new_str for the replacement. Use empty old_str to create a new file.
+- run_command: Execute a shell command in the terminal. Use this to run tests, install dependencies, build projects, lint code, type-check, or execute any CLI commands. The command will be executed in the specified working directory, or the current directory if not specified.
 
-When doing file operations, prefer to use the read_file tool to understand code before making suggestions. Use list_directory to explore the codebase structure when needed.
+When doing file operations, prefer to use the read_file tool to understand code before making edits. Use list_directory to explore the codebase structure when needed. When editing files, ensure old_str exactly matches the content in the file, including all whitespace, newlines, and formatting. Use run_command to verify your changes by running tests, linters, or other validation commands.
 
 You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance.
 

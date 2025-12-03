@@ -8,12 +8,16 @@ import type {
 import chalk from "chalk";
 import * as readline from "readline";
 import {
+  editFileTool,
   executeTool,
   isToolName,
   listDirectoryTool,
   readFileTool,
+  runCommandTool,
+  type EditFileArgs,
   type ListDirectoryArgs,
   type ReadFileArgs,
+  type RunCommandArgs,
 } from "./tools.js";
 
 type ChatMessage =
@@ -151,7 +155,7 @@ Available commands:
       const chatResponse = await client.chat.complete({
         model: "mistral-small-latest",
         messages,
-        tools: [readFileTool, listDirectoryTool],
+        tools: [readFileTool, listDirectoryTool, editFileTool, runCommandTool],
       });
 
       const choice = chatResponse.choices[0];
@@ -218,6 +222,12 @@ Available commands:
             const functionArgs = JSON.parse(
               functionArgsStr
             ) as ListDirectoryArgs;
+            result = await executeTool(functionName, functionArgs);
+          } else if (functionName === "edit_file") {
+            const functionArgs = JSON.parse(functionArgsStr) as EditFileArgs;
+            result = await executeTool(functionName, functionArgs);
+          } else if (functionName === "run_command") {
+            const functionArgs = JSON.parse(functionArgsStr) as RunCommandArgs;
             result = await executeTool(functionName, functionArgs);
           } else {
             const _exhaustive: never = functionName;
