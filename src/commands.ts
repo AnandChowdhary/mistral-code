@@ -64,12 +64,18 @@ export function createLoadingAnimation(): () => void {
   };
 }
 
+type PlanModeState = {
+  getPlanMode: () => boolean;
+  setPlanMode: (mode: boolean) => void;
+};
+
 export async function processCommand(
   input: string,
   client: Mistral,
   systemPrompt: string,
   conversationHistory: ConversationMessage[],
-  rl: readline.Interface
+  rl: readline.Interface,
+  planModeState: PlanModeState
 ): Promise<void> {
   const trimmed = input.trim();
 
@@ -81,6 +87,7 @@ export async function processCommand(
 
   if (trimmed === "clear") {
     conversationHistory.length = 0;
+    planModeState.setPlanMode(false);
     console.log(chalk.green("✓ Conversation history cleared.\n"));
     rl.prompt();
     return;
@@ -91,6 +98,8 @@ export async function processCommand(
       chalk.blue(`
 Available commands:
   - Type any message to chat with the agent
+  - '/plan <message>' - Enter plan mode (read-only, creates step-by-step plan)
+  - '/approve' - Approve the plan and start implementation
   - 'exit' or 'quit' - Exit the CLI
   - 'clear' - Clear conversation history
   - 'help' - Show this help message
@@ -105,14 +114,93 @@ Available commands:
     return;
   }
 
-  conversationHistory.push({ role: "user", content: trimmed });
+  let userMessage = trimmed;
+  let isPlanMode = planModeState.getPlanMode();
+
+  // Check for /plan prefix
+  if (trimmed.startsWith("/plan")) {
+    const planMessage = trimmed.slice(5).trim();
+    if (planMessage) {
+      userMessage = planMessage;
+      isPlanMode = true;
+      planModeState.setPlanMode(true);
+      console.log(
+        chalk.yellow("📋 Plan mode enabled - no changes will be made\n")
+      );
+      console.log(
+        chalk.gray(
+          "💡 Type '/approve' to approve the plan and start implementation, or type your changes to update the plan.\n"
+        )
+      );
+    } else {
+      // Just "/plan" without message - enter plan mode
+      isPlanMode = true;
+      planModeState.setPlanMode(true);
+      console.log(
+        chalk.yellow("📋 Plan mode enabled - no changes will be made\n")
+      );
+      console.log(
+        chalk.gray(
+          "💡 Type '/approve' to approve the plan and start implementation, or type your changes to update the plan.\n"
+        )
+      );
+      rl.prompt();
+      return;
+    }
+  }
+
+  // Check for /approve to exit plan mode
+  const lowerTrimmed = trimmed.toLowerCase();
+  const isApprovalCommand =
+    lowerTrimmed === "/approve" ||
+    lowerTrimmed === "approve" ||
+    lowerTrimmed === "yes" ||
+    lowerTrimmed === "yes, implement" ||
+    lowerTrimmed === "yes implement" ||
+    lowerTrimmed.startsWith("/approve");
+
+  // If already in plan mode (from previous command), remind user
+  if (isPlanMode && !trimmed.startsWith("/plan") && !isApprovalCommand) {
+    console.log(chalk.yellow("📋 [PLAN MODE ACTIVE]"));
+    console.log(
+      chalk.gray(
+        "💡 Type '/approve' to approve the plan and start implementation, or type your changes to update the plan.\n"
+      )
+    );
+  }
+
+  if (isApprovalCommand) {
+    if (isPlanMode) {
+      planModeState.setPlanMode(false);
+      console.log(
+        chalk.green("✓ Plan approved - implementation mode enabled\n")
+      );
+      userMessage = "Please implement the plan we discussed.";
+      isPlanMode = false; // Update local variable
+    } else {
+      console.log(
+        chalk.yellow("ℹ Not in plan mode. Use '/plan' to enter plan mode.\n")
+      );
+      rl.prompt();
+      return;
+    }
+  }
+
+  conversationHistory.push({ role: "user", content: userMessage });
 
   const stopLoading = createLoadingAnimation();
   try {
+    // Add plan mode instruction to system prompt if in plan mode
+    let effectiveSystemPrompt = systemPrompt.trim();
+    if (isPlanMode) {
+      effectiveSystemPrompt +=
+        "\n\n[PLAN MODE ACTIVE] You are currently in PLAN MODE. This means:\n- You MUST NOT make any changes to files (do not use edit_file tool)\n- You MUST NOT execute any commands (do not use run_command tool)\n- You CAN read files (read_file) and list directories (list_directory) to understand the codebase\n- Your goal is to create a detailed, step-by-step plan for the user\n- Present the plan clearly with numbered steps\n- Wait for user approval before implementing anything\n- If the user suggests changes to the plan, update the plan accordingly";
+    }
+
     const messages: ChatMessage[] = [
       {
         role: "system",
-        content: systemPrompt.trim(),
+        content: effectiveSystemPrompt,
       },
       ...conversationHistory.map((msg): ChatMessage => {
         if (msg.role === "tool" && msg.toolCallId) {
@@ -152,10 +240,15 @@ Available commands:
     while (iteration < maxIterations) {
       iteration++;
 
+      // In plan mode, only allow read-only tools
+      const availableTools = isPlanMode
+        ? [readFileTool, listDirectoryTool]
+        : [readFileTool, listDirectoryTool, editFileTool, runCommandTool];
+
       const chatResponse = await client.chat.complete({
         model: "mistral-small-latest",
         messages,
-        tools: [readFileTool, listDirectoryTool, editFileTool, runCommandTool],
+        tools: availableTools,
       });
 
       const choice = chatResponse.choices[0];
@@ -214,6 +307,24 @@ Available commands:
             continue;
           }
 
+          // Block write operations in plan mode
+          if (
+            isPlanMode &&
+            (functionName === "edit_file" || functionName === "run_command")
+          ) {
+            console.error(
+              chalk.red(
+                `✗ Tool ${functionName} is not available in plan mode. Use '/approve' to exit plan mode and start implementation.`
+              )
+            );
+            messages.push({
+              role: "tool" as const,
+              content: `Error: Cannot use ${functionName} in plan mode. Plan mode only allows reading files and listing directories. Use '/approve' to exit plan mode and start implementation.`,
+              toolCallId: toolCall.id,
+            });
+            continue;
+          }
+
           let result: string;
           if (functionName === "read_file") {
             const functionArgs = JSON.parse(functionArgsStr) as ReadFileArgs;
@@ -269,9 +380,22 @@ Available commands:
       }
 
       stopLoading();
+
+      // Show plan mode indicator
+      const modeIndicator = isPlanMode ? chalk.yellow(" [PLAN MODE]") : "";
       console.log(
-        chalk.bold.cyan("Mistral Code:") + ` ${chalk.white(assistantMessage)}\n`
+        chalk.bold.cyan("Mistral Code:") +
+          modeIndicator +
+          ` ${chalk.white(assistantMessage)}\n`
       );
+
+      if (isPlanMode) {
+        console.log(
+          chalk.gray(
+            "💡 Type '/approve' to approve the plan and start implementation, or type your changes to update the plan.\n"
+          )
+        );
+      }
 
       conversationHistory.push({
         role: "assistant",

@@ -45,6 +45,8 @@ const conversationHistory: Array<{
   }>;
 }> = [];
 
+let planMode = false;
+
 const mistralGradient = gradient(["#ffd800", "#ffaf00", "#ff8203", "#e10300"]);
 console.log(
   mistralGradient.multiline(`        
@@ -60,7 +62,12 @@ console.log(
 rl.prompt();
 
 rl.on("line", (input) => {
-  processCommand(input, client, systemPrompt, conversationHistory, rl);
+  processCommand(input, client, systemPrompt, conversationHistory, rl, {
+    getPlanMode: () => planMode,
+    setPlanMode: (mode: boolean) => {
+      planMode = mode;
+    },
+  });
 });
 
 rl.on("close", () => {
