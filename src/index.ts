@@ -1,4 +1,10 @@
 import { Mistral } from "@mistralai/mistralai";
+import type {
+  AssistantMessage,
+  SystemMessage,
+  ToolMessage,
+  UserMessage,
+} from "@mistralai/mistralai/models/components";
 import "dotenv/config";
 import * as fs from "fs/promises";
 import * as path from "path";
@@ -55,10 +61,13 @@ const readFileTool = {
   },
 };
 
-async function executeTool(
-  toolName: string,
-  args: Record<string, any>
-): Promise<string> {
+type ReadFileArgs = {
+  file_path: string;
+};
+
+type ToolArgs = ReadFileArgs;
+
+async function executeTool(toolName: string, args: ToolArgs): Promise<string> {
   switch (toolName) {
     case "read_file": {
       try {
@@ -118,25 +127,41 @@ Available commands:
   try {
     console.log("Thinking...\n");
 
-    const messages = [
+    type ChatMessage =
+      | (SystemMessage & { role: "system" })
+      | (UserMessage & { role: "user" })
+      | (AssistantMessage & { role: "assistant" })
+      | (ToolMessage & { role: "tool" });
+
+    const messages: ChatMessage[] = [
       {
-        role: "system" as const,
+        role: "system",
         content:
           "You are a helpful coding assistant similar to Claude Code. You help users with programming tasks, answer questions, and provide clear explanations. You can read files using the read_file tool when needed.",
       },
-      ...conversationHistory.map((msg) => {
-        if (msg.role === "tool") {
+      ...conversationHistory.map((msg): ChatMessage => {
+        if (msg.role === "tool" && msg.toolCallId) {
           return {
-            role: "tool" as const,
+            role: "tool",
             content: msg.content,
-            toolCallId: msg.toolCallId!,
+            toolCallId: msg.toolCallId,
           };
         }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           return {
-            role: "assistant" as const,
+            role: "assistant",
             content: msg.content,
-            toolCalls: msg.toolCalls,
+            toolCalls: msg.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: tc.type as "function",
+              function: {
+                name: tc.function.name,
+                arguments:
+                  typeof tc.function.arguments === "string"
+                    ? tc.function.arguments
+                    : JSON.stringify(tc.function.arguments),
+              },
+            })),
           };
         }
         return {
@@ -154,7 +179,7 @@ Available commands:
 
       const chatResponse = await client.chat.complete({
         model: "mistral-small-latest",
-        messages: messages as any,
+        messages,
         tools: [readFileTool],
       });
 
@@ -168,15 +193,18 @@ Available commands:
       const toolCalls = message.toolCalls;
 
       if (toolCalls && toolCalls.length > 0) {
-        const assistantMsg: any = {
-          role: "assistant" as const,
+        const assistantMsg: AssistantMessage & { role: "assistant" } = {
+          role: "assistant",
           content: message.content || "",
           toolCalls: toolCalls.map((tc) => ({
-            id: tc.id,
-            type: tc.type,
+            id: tc.id || "",
+            type: tc.type || "function",
             function: {
               name: tc.function.name,
-              arguments: tc.function.arguments,
+              arguments:
+                typeof tc.function.arguments === "string"
+                  ? tc.function.arguments
+                  : JSON.stringify(tc.function.arguments),
             },
           })),
         };
