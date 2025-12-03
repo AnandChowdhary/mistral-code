@@ -2,13 +2,19 @@ import { Mistral } from "@mistralai/mistralai";
 import type {
   AssistantMessage,
   SystemMessage,
+  Tool,
   ToolMessage,
   UserMessage,
 } from "@mistralai/mistralai/models/components";
 import "dotenv/config";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { dirname } from "path";
 import * as readline from "readline";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const apiKey = process.env.MISTRAL_API_KEY || "";
 if (!apiKey) {
@@ -18,6 +24,9 @@ if (!apiKey) {
   );
   process.exit(1);
 }
+
+const promptPath = path.join(__dirname, "prompt.md");
+const systemPrompt = await fs.readFile(promptPath, "utf-8");
 
 const client = new Mistral({ apiKey });
 
@@ -41,8 +50,23 @@ const conversationHistory: Array<{
   }>;
 }> = [];
 
-const readFileTool = {
-  type: "function" as const,
+type ReadFileArgs = {
+  file_path: string;
+};
+
+type ListDirectoryArgs = {
+  directory_path?: string;
+};
+
+type ToolRegistry = {
+  read_file: ReadFileArgs;
+  list_directory: ListDirectoryArgs;
+};
+
+type ToolName = keyof ToolRegistry;
+
+const readFileTool: Tool = {
+  type: "function",
   function: {
     name: "read_file",
     description:
@@ -61,17 +85,47 @@ const readFileTool = {
   },
 };
 
-type ReadFileArgs = {
-  file_path: string;
+const listDirectoryTool: Tool = {
+  type: "function",
+  function: {
+    name: "list_directory",
+    description:
+      "List the contents of a directory. Returns a list of files and directories in the specified path.",
+    parameters: {
+      type: "object",
+      properties: {
+        directory_path: {
+          type: "string",
+          description:
+            "The path to the directory to list. Can be relative or absolute. Defaults to current directory if not provided.",
+        },
+      },
+      required: [],
+    },
+  },
 };
 
-type ToolArgs = ReadFileArgs;
+function isToolName(name: string): name is ToolName {
+  return name === "read_file" || name === "list_directory";
+}
 
-async function executeTool(toolName: string, args: ToolArgs): Promise<string> {
+async function executeTool(
+  toolName: "read_file",
+  args: ReadFileArgs
+): Promise<string>;
+async function executeTool(
+  toolName: "list_directory",
+  args: ListDirectoryArgs
+): Promise<string>;
+async function executeTool(
+  toolName: ToolName,
+  args: ToolRegistry[ToolName]
+): Promise<string> {
   switch (toolName) {
     case "read_file": {
+      const readArgs = args as ReadFileArgs;
       try {
-        const filePath = args.file_path as string;
+        const filePath = readArgs.file_path;
         const resolvedPath = path.isAbsolute(filePath)
           ? filePath
           : path.resolve(process.cwd(), filePath);
@@ -84,8 +138,42 @@ async function executeTool(toolName: string, args: ToolArgs): Promise<string> {
         }`;
       }
     }
-    default:
+    case "list_directory": {
+      const listArgs = args as ListDirectoryArgs;
+      try {
+        const dirPath = listArgs.directory_path || ".";
+        const resolvedPath = path.isAbsolute(dirPath)
+          ? dirPath
+          : path.resolve(process.cwd(), dirPath);
+
+        const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+        const items = await Promise.all(
+          entries.map(async (entry) => {
+            const name = entry.name;
+            const type = entry.isDirectory() ? "directory" : "file";
+            let size = "";
+            if (entry.isFile()) {
+              try {
+                const stats = await fs.stat(path.join(resolvedPath, name));
+                size = ` (${stats.size} bytes)`;
+              } catch {
+                // Ignore stat errors
+              }
+            }
+            return `${type === "directory" ? "📁" : "📄"} ${name}${size}`;
+          })
+        );
+        return items.join("\n");
+      } catch (error) {
+        return `Error listing directory: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`;
+      }
+    }
+    default: {
+      const _exhaustive: never = toolName;
       return `Unknown tool: ${toolName}`;
+    }
   }
 }
 
@@ -136,8 +224,7 @@ Available commands:
     const messages: ChatMessage[] = [
       {
         role: "system",
-        content:
-          "You are a helpful coding assistant similar to Claude Code. You help users with programming tasks, answer questions, and provide clear explanations. You can read files using the read_file tool when needed.",
+        content: systemPrompt.trim(),
       },
       ...conversationHistory.map((msg): ChatMessage => {
         if (msg.role === "tool" && msg.toolCallId) {
@@ -180,7 +267,7 @@ Available commands:
       const chatResponse = await client.chat.complete({
         model: "mistral-small-latest",
         messages,
-        tools: [readFileTool],
+        tools: [readFileTool, listDirectoryTool],
       });
 
       const choice = chatResponse.choices[0];
@@ -221,12 +308,29 @@ Available commands:
             typeof toolCall.function.arguments === "string"
               ? toolCall.function.arguments
               : JSON.stringify(toolCall.function.arguments);
-          const functionArgs = JSON.parse(functionArgsStr);
 
           console.log(`\n🔧 Calling tool: ${functionName}`);
           console.log(`   Arguments: ${functionArgsStr}\n`);
 
-          const result = await executeTool(functionName, functionArgs);
+          if (!isToolName(functionName)) {
+            console.error(`Unknown tool: ${functionName}`);
+            continue;
+          }
+
+          let result: string;
+          if (functionName === "read_file") {
+            const functionArgs = JSON.parse(functionArgsStr) as ReadFileArgs;
+            result = await executeTool(functionName, functionArgs);
+          } else if (functionName === "list_directory") {
+            const functionArgs = JSON.parse(
+              functionArgsStr
+            ) as ListDirectoryArgs;
+            result = await executeTool(functionName, functionArgs);
+          } else {
+            const _exhaustive: never = functionName;
+            console.error(`Unknown tool: ${functionName}`);
+            continue;
+          }
 
           const resultPreview =
             result.length > 200
